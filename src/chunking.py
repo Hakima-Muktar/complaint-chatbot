@@ -144,8 +144,8 @@ def save_chunks(chunks_data: List[Dict], output_file: str) -> None:
 def main():
     """Main function to create text chunks."""
     # Load the sample data
-    input_file = "data/processed/sample_complaints.csv"
-    output_file = "data/processed/sample_chunks.csv"
+    input_file = r"C:\Users\user\Desktop\Project\complaint-chatbot\data\processed\complaints.csv"
+    output_file =r"C:\Users\user\Desktop\Project\complaint-chatbot\data\processed\sample_chunk.csv"
     
     print(f"Loading sample data from {input_file}...")
     df = pd.read_csv(input_file)
