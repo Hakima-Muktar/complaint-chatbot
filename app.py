@@ -1,11 +1,3 @@
-"""
-Task 4: Interactive Chat Interface using Gradio
-
-A RAG-powered chatbot for analyzing CFPB customer complaints.
-
-Usage:
-    python app.py
-"""
 
 import gradio as gr
 from src.rag import RAGPipeline
