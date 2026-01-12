@@ -10,8 +10,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import List, Dict
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 def create_text_chunks(
     df: pd.DataFrame,
