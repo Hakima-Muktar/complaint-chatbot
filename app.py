@@ -1,234 +1,147 @@
-
 import gradio as gr
-from src.rag import RAGPipeline
+from src.rag.pipeline import RAGSystem
+import os
+import json
+from datetime import datetime
 
-# Initialize RAG pipeline
-rag = None
+# Initialize RAG System
+# Use absolute path to ensure it works regardless of where the script is run from
+base_dir = os.path.dirname(os.path.abspath(__file__))
+vector_store_path = os.path.join(base_dir, "vector_store", "faiss_index")
 
-def get_rag():
-    """Lazy load RAG pipeline."""
-    global rag
-    if rag is None:
-        rag = RAGPipeline()
-    return rag
+# Check if vector store exists
+if not os.path.exists(vector_store_path):
+    raise FileNotFoundError(
+        f"Vector store not found at {vector_store_path}. "
+        "Please run the Task 2 notebook to create the vector store first."
+    )
 
+print("Initializing RAG System...")
+rag_system = RAGSystem(vector_store_path)
+print("RAG System ready!")
 
-def format_sources(sources):
-    """Format sources for display."""
-    if not sources:
-        return "<p style='color: #6b7280;'>No sources found.</p>"
-    
-    html_parts = []
-    for i, src in enumerate(sources, 1):
-        text_preview = src['text'][:280] + "..." if len(src['text']) > 280 else src['text']
-        html_parts.append(f"""
-        <div style="background: #f8fafc; border-left: 3px solid #3b82f6; padding: 16px; margin-bottom: 12px; border-radius: 4px;">
-            <div style="display: flex; gap: 16px; margin-bottom: 8px; font-size: 12px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px;">
-                <span>Source {i}</span>
-                <span style="color: #3b82f6;">{src['product'].replace('_', ' ').title()}</span>
-                <span>{src['issue']}</span>
-            </div>
-            <p style="margin: 0; color: #334155; font-size: 14px; line-height: 1.6;">{text_preview}</p>
-        </div>
-        """)
-    return "".join(html_parts)
+# Create logs directory if it doesn't exist
+os.makedirs("logs", exist_ok=True)
 
-
-def format_answer(answer):
-    """Format answer with clean styling."""
-    if not answer:
-        return ""
-    return f"""
-    <div style="background: #ffffff; padding: 24px; border-radius: 8px; border: 1px solid #e2e8f0;">
-        <p style="margin: 0; color: #1e293b; font-size: 15px; line-height: 1.8;">{answer}</p>
-    </div>
-    """
-
-
-def analyze(message, product_filter, num_sources):
-    """Process user message and return response with sources."""
-    if not message.strip():
-        return "<p style='color: #94a3b8;'>Enter a question to begin analysis.</p>", ""
-    
-    filter_map = {
-        "All Products": None,
-        "Credit Card": "credit_card",
-        "Personal Loan": "personal_loan",
-        "Savings Account": "savings_account",
-        "Money Transfer": "money_transfer"
+def log_interaction(query, response):
+    """Log user interactions for analysis."""
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "query": query,
+        "answer": response['answer'],
+        "sources": [s.get('complaint_id', 'N/A') for s in response['context'][:3]]
     }
+    with open("logs/chat_interactions.jsonl", "a") as f:
+        f.write(json.dumps(log_entry) + "\n")
+
+def process_query(message, history):
+    """
+    Process user message and return updated history.
+    """
+    if not message or message.strip() == "":
+        return "", history
     
-    pipeline = get_rag()
-    answer, sources = pipeline.answer(
-        question=message,
-        product_filter=filter_map.get(product_filter),
-        top_k=int(num_sources)
+    # Append user message to history
+    history.append({"role": "user", "content": message})
+    
+    try:
+        # Query RAG system
+        response = rag_system.query(message)
+        
+        # Log the interaction
+        log_interaction(message, response)
+        
+        # Format response with sources
+        answer = response['answer']
+        sources = response['context'][:3]  # Top 3 sources
+        
+        # Build formatted response
+        formatted_response = f"{answer}\n\n**📚 Sources:**\n"
+        for i, src in enumerate(sources, 1):
+            company = src.get('company', 'Unknown')
+            product = src.get('product', 'N/A')
+            text_preview = src.get('text', '')[:150]
+            formatted_response += f"\n{i}. **{company}** - {product}\n"
+            formatted_response += f"   _{text_preview}..._\n"
+            
+        history.append({"role": "assistant", "content": formatted_response})
+        return "", history
+    
+    except Exception as e:
+        error_msg = f"❌ Error processing your query: {str(e)}\n\nPlease try again or rephrase your question."
+        history.append({"role": "assistant", "content": error_msg})
+        return "", history
+
+def clear_history():
+    """Clear the chat history."""
+    return [], ""
+
+# Create Gradio Blocks Interface
+with gr.Blocks() as demo:
+    gr.Markdown(
+        """
+        # 💬 CrediTrust Complaint Analysis Assistant
+        
+        Ask questions about consumer complaints related to:
+        - 💳 Credit cards
+        - 💰 Personal loans
+        - 🏦 Savings accounts
+        - 💸 Money transfers
+        
+        This AI assistant uses a RAG (Retrieval-Augmented Generation) system to provide answers based on real consumer complaints from the CFPB database.
+        """
     )
     
-    return format_answer(answer), format_sources(sources)
-
-
-# Custom CSS for modern, minimalist design
-custom_css = """
-:root {
-    --primary: #0f172a;
-    --secondary: #3b82f6;
-    --bg: #ffffff;
-    --surface: #f8fafc;
-    --border: #e2e8f0;
-    --text: #1e293b;
-    --text-muted: #64748b;
-}
-
-.gradio-container {
-    max-width: 1200px !important;
-    margin: 0 auto !important;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
-}
-
-.main-header {
-    text-align: center;
-    padding: 48px 24px 32px;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 32px;
-}
-
-.main-header h1 {
-    font-size: 28px;
-    font-weight: 600;
-    color: var(--primary);
-    margin: 0 0 8px 0;
-    letter-spacing: -0.5px;
-}
-
-.main-header p {
-    font-size: 15px;
-    color: var(--text-muted);
-    margin: 0;
-}
-
-.input-section {
-    background: var(--surface);
-    padding: 24px;
-    border-radius: 12px;
-    border: 1px solid var(--border);
-}
-
-.results-section {
-    margin-top: 24px;
-}
-
-.section-label {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    margin-bottom: 12px;
-}
-
-footer {
-    display: none !important;
-}
-
-.gr-button-primary {
-    background: var(--primary) !important;
-    border: none !important;
-    font-weight: 500 !important;
-}
-
-.gr-button-primary:hover {
-    background: #1e293b !important;
-}
-
-.example-btn {
-    background: transparent !important;
-    border: 1px solid var(--border) !important;
-    color: var(--text) !important;
-    font-size: 13px !important;
-}
-
-.example-btn:hover {
-    background: var(--surface) !important;
-    border-color: var(--secondary) !important;
-}
-"""
-
-# Build interface
-with gr.Blocks(css=custom_css, title="CrediTrust Complaint Analyzer") as demo:
+    chatbot = gr.Chatbot(height=500, label="Conversation History")
     
-    # Header
-    gr.HTML("""
-        <div class="main-header">
-            <h1>CrediTrust Complaint Analyzer</h1>
-            <p>Intelligent analysis of customer complaints powered by RAG</p>
-        </div>
-    """)
-    
-    # Input Section
-    with gr.Group(elem_classes="input-section"):
-        question_input = gr.Textbox(
-            label="Question",
-            placeholder="What patterns or issues would you like to analyze?",
-            lines=2,
-            show_label=True
-        )
-        
-        with gr.Row():
-            product_filter = gr.Dropdown(
-                choices=["All Products", "Credit Card", "Personal Loan", "Savings Account", "Money Transfer"],
-                value="All Products",
-                label="Product Filter",
-                scale=2
-            )
-            num_sources = gr.Slider(
-                minimum=3,
-                maximum=10,
-                value=5,
-                step=1,
-                label="Sources",
-                scale=1
-            )
-            submit_btn = gr.Button("Analyze", variant="primary", scale=1)
-    
-    # Quick Examples
-    gr.HTML("<p class='section-label' style='margin-top: 24px;'>Quick queries</p>")
     with gr.Row():
-        ex1 = gr.Button("Credit card complaints", size="sm", elem_classes="example-btn")
-        ex2 = gr.Button("Billing disputes", size="sm", elem_classes="example-btn")
-        ex3 = gr.Button("Unauthorized transactions", size="sm", elem_classes="example-btn")
-        ex4 = gr.Button("Account closure issues", size="sm", elem_classes="example-btn")
+        msg = gr.Textbox(
+            placeholder="Type your question here (e.g., 'Why was my loan denied?')...",
+            scale=4,
+            label="Your Question"
+        )
+        submit_btn = gr.Button("Submit", variant="primary", scale=1)
     
-    # Results Section
-    gr.HTML("<p class='section-label' style='margin-top: 32px;'>Analysis</p>")
-    answer_output = gr.HTML(elem_classes="results-section")
-    
-    gr.HTML("<p class='section-label' style='margin-top: 24px;'>Source Documents</p>")
-    sources_output = gr.HTML()
-    
+    with gr.Row():
+        clear_btn = gr.Button("🗑️ Clear Chat & Reset", variant="secondary")
+        
+    gr.Examples(
+        examples=[
+            "Why was my loan denied?",
+            "How do I dispute a charge on my credit card?",
+            "What are common issues with savings accounts?",
+            "How long does a money transfer take?",
+            "What should I do if my credit card was charged incorrectly?",
+            "Why is my savings account showing unexpected fees?"
+        ],
+        inputs=msg,
+        label="Example Queries (Click to try)"
+    )
+
     # Event handlers
     submit_btn.click(
-        fn=analyze,
-        inputs=[question_input, product_filter, num_sources],
-        outputs=[answer_output, sources_output]
+        fn=process_query,
+        inputs=[msg, chatbot],
+        outputs=[msg, chatbot]
     )
     
-    question_input.submit(
-        fn=analyze,
-        inputs=[question_input, product_filter, num_sources],
-        outputs=[answer_output, sources_output]
+    msg.submit(
+        fn=process_query,
+        inputs=[msg, chatbot],
+        outputs=[msg, chatbot]
     )
     
-    # Example handlers
-    ex1.click(lambda: "What are the main complaints about credit cards?", outputs=question_input)
-    ex2.click(lambda: "What billing disputes are customers reporting?", outputs=question_input)
-    ex3.click(lambda: "Are there complaints about unauthorized transactions or fraud?", outputs=question_input)
-    ex4.click(lambda: "What problems do customers face when trying to close accounts?", outputs=question_input)
-
+    clear_btn.click(
+        fn=clear_history,
+        inputs=[],
+        outputs=[chatbot, msg]
+    )
 
 if __name__ == "__main__":
-    print("Starting CrediTrust Complaint Analyzer...")
-    print("Loading RAG pipeline...")
-    get_rag()
-    print("Ready.")
-    demo.launch(share=False)
+    demo.launch(
+        share=False, 
+        server_name="0.0.0.0", 
+        server_port=7860,
+        show_error=True,
+        theme=gr.themes.Soft()
+    )
